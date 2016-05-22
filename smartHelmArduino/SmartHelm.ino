@@ -1,3 +1,4 @@
+
 /*
 
 Copyright (c) 2012, 2013 RedBearLab
@@ -16,6 +17,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <boards.h>
 #include <RBL_nRF8001.h>
 #include "Boards.h"
+#include <PCD8544.h>
+
 
 #define PROTOCOL_MAJOR_VERSION   0 //
 #define PROTOCOL_MINOR_VERSION   0 //
@@ -29,9 +32,23 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #define PIN_CAPABILITY_I2C       0x10
 
 // two pins from total pins
-#define PIN_LEFT     6
-#define PIN_RIGHT    7
-#define PIN_DISTANCE 8
+#define PIN_LEFT     13
+#define PIN_RIGHT    12
+// direction grades definition
+#define TURN_NONE_1           1
+#define TURN_KEEP_RIGHT_3     3
+#define TURN_LIGHT_RIGHT_4    4
+#define TURN_QUITE_RIGHT_5    5
+#define TURN_HEAVY_RIGHT_6    6
+#define TURN_KEEP_LEFT_7      7
+#define TURN_LIGHT_LEFT_8     8
+#define TURN_QUITE_LEFT_9     9
+#define TURN_HEAVY_LEFT_10   10
+
+// initializing variables heartRate and distance
+#define HEARTRATE_DEF            100
+#define DISTANCE_DEF             1020
+
 
 // pin modes
 //#define INPUT                 0x00 // defined in wiring.h
@@ -46,9 +63,29 @@ byte pin_pwm[TOTAL_PINS];
 byte pin_servo[TOTAL_PINS];
 
 Servo servos[MAX_SERVOS];
+static const byte glyph[] = { B00010000, B00110100, B00110000, B00110100, B00010000 };
+static const byte heart[] = { B00011000, B01111100, B11111000, B01111100, B00011000 };
+static PCD8544 lcd;
 
 void setup()
 {
+
+  // PCD8544-compatible displays may have a different resolution...
+  lcd.begin(84, 48);
+
+  // Add the smiley to position "0" of the ASCII table...
+  lcd.createChar(0, glyph);
+  lcd.createChar(1, heart);
+  // welcome_scr();
+  distance_scr(53 , 10, 1);        // just a check display ;) sa to neopovaz vymazat :D
+  
+    //initialization vibration engines
+  pinMode(PIN_LEFT, OUTPUT);
+  digitalWrite(PIN_LEFT, LOW);
+  pinMode(PIN_RIGHT, OUTPUT);
+  digitalWrite(PIN_RIGHT, LOW);
+ // runSensors(10);
+
   Serial.begin(57600);
   Serial.println("BLE Arduino Slave");
   
@@ -229,26 +266,6 @@ void sendCustomData(uint8_t *buf, uint8_t len)
   uint8_t data[20] = "Z";
   memcpy(&data[1], buf, len);
   ble_write_string(data, len+1);
-}
-  
-
-void runSensors(int left, int right, int distance)
-{
-        // go to the left
-        if(left ==  1 && right == 0){
-          digitalWrite(PIN_LEFT, HIGH);
-          digitalWrite(PIN_RIGHT, LOW);
-        }
-        // go to the right
-        if(right == 1 && left == 0){
-          digitalWrite(PIN_RIGHT, HIGH);
-          digitalWrite(PIN_LEFT, LOW);
-        }
-        // go directly
-        if(right == 1 && left == 1){
-          digitalWrite(PIN_RIGHT, HIGH);
-          digitalWrite(PIN_LEFT, HIGH);
-        }
 }
 
 byte queryDone = false;
@@ -437,17 +454,19 @@ void loop()
           Serial.println();
         }
       case 'W':
-      {
-        byte left = ble_read();
-        byte right = ble_read();
+      {               
+        // direction grades from 1 to 10
+        byte directionGrade = ble_read();
+
+        // distance * multipler = meters to first crossroad
         byte distance = ble_read();
-         
-        
-        pinMode(PIN_LEFT, OUTPUT);
-        pinMode(PIN_RIGHT, OUTPUT);
-        pinMode(PIN_DESTINATION, OUTPUT);
-        
-        runSensors((int)left,(int)right, (int)distance);
+        byte multipler = ble_read();      
+
+        // function for controlling vibrating sensors
+        runSensors((int)directionGrade);
+
+        // TODO: call function with real values of heartrate and distance HEARTRATE_DEF, 
+        distance_scr((int)distance, (int)multipler, (int)directionGrade);
        
       }
     }
@@ -505,5 +524,101 @@ void loop()
     
   ble_do_events();
   buf_len = 0;
+}
+
+
+void motorsControll(bool b_right, bool b_left, int delay_period){
+  digitalWrite(PIN_RIGHT, b_right);
+  digitalWrite(PIN_LEFT, b_left);
+  delay(delay_period);
+  digitalWrite(PIN_RIGHT, LOW);
+  digitalWrite(PIN_LEFT, LOW);
+}
+
+void runSensors(int directionGrade)
+{
+  switch(directionGrade){
+    // go directly
+    case TURN_NONE_1: 
+      motorsControll(HIGH, HIGH, 400);
+    break;
+    // go to the right             
+    case TURN_KEEP_RIGHT_3:
+      motorsControll(HIGH, LOW, 200);
+    break;
+    case TURN_LIGHT_RIGHT_4:
+      motorsControll(HIGH, LOW, 400);
+    break;
+    case TURN_QUITE_RIGHT_5:
+      motorsControll(HIGH, LOW, 600);
+    break;
+    case TURN_HEAVY_RIGHT_6:
+      motorsControll(HIGH, LOW, 800);
+    break;
+    // go to the left
+    case TURN_KEEP_LEFT_7:
+      motorsControll(LOW, HIGH, 200);
+    break;      
+    case TURN_LIGHT_LEFT_8:
+      motorsControll(LOW, HIGH, 400);
+    break;      
+    case TURN_QUITE_LEFT_9:
+      motorsControll(LOW, HIGH, 600);
+    break;      
+    case TURN_HEAVY_LEFT_10:
+      motorsControll(LOW, HIGH, 800);
+    break;       
+  }
+}
+
+void distance_scr(int distance, int multipler, int directionGrade) 
+{
+  int distance_to_first = distance * multipler;
+  String unit = " m";
+  if (distance_to_first > 1000)
+  {
+    distance_to_first /=1000;
+    unit = " km";
+  }
+  String direction_1 = "Continue";
+  String direction_2 = "straight";
+  String direction_3 = "";
+  
+  if(directionGrade > 2 && directionGrade < 7){
+    direction_1 = "Go to the";
+    direction_2 = "right after:";
+    direction_3 = String(distance_to_first, DEC) + unit;
+  }
+  if(directionGrade > 6 && directionGrade < 11){
+    direction_1 = "Go to the";
+    direction_2 = "left after:";
+    direction_3 = String(distance_to_first, DEC) + unit;
+  }
+  
+  // Write a piece of text on the first line...
+  lcd.setCursor(0, 0);
+  lcd.print(direction_1);
+  lcd.setCursor(0, 1);
+  lcd.print(direction_2);
+  lcd.setCursor(0, 2);
+  lcd.print(direction_3);
+}
+
+void heart_scr(){  
+  lcd.setCursor(0, 4);
+  lcd.print("Your heart");
+
+  lcd.setCursor(0,5);
+  lcd.print("rate: 90");
+  lcd.write(' ');
+  lcd.write(1);
+  lcd.write(' ');
+}
+  
+void welcome_scr() {
+  lcd.setCursor(0, 0);
+  lcd.print("Hi, My dear friend. May the Force be with you!");
+  lcd.setCursor(0, 1);
+  lcd.print("Please, drive safely");
 }
 
